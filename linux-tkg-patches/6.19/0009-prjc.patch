@@ -771,10 +771,10 @@ index 8ae86371ddcd..a972ef1e31a7 100644
  obj-y += build_utility.o
 diff --git a/kernel/sched/alt_core.c b/kernel/sched/alt_core.c
 new file mode 100644
-index 000000000000..f3462b963632
+index 000000000000..758928e23c52
 --- /dev/null
 +++ b/kernel/sched/alt_core.c
-@@ -0,0 +1,7630 @@
+@@ -0,0 +1,7629 @@
 +/*
 + *  kernel/sched/alt_core.c
 + *
@@ -851,7 +851,7 @@ index 000000000000..f3462b963632
 +__read_mostly int sysctl_resched_latency_warn_ms = 100;
 +__read_mostly int sysctl_resched_latency_warn_once = 1;
 +
-+#define ALT_SCHED_VERSION "v6.19-r1"
++#define ALT_SCHED_VERSION "v6.19-r2"
 +
 +#define STOP_PRIO		(MAX_RT_PRIO - 1)
 +
@@ -8273,10 +8273,9 @@ index 000000000000..f3462b963632
 +					return;
 +				/*
 +				 * Mode change. The task has the CID unset
-+				 * already. The CPU CID is still valid and
-+				 * does not have MM_CID_TRANSIT set as the
-+				 * mode change has just taken effect under
-+				 * mm::mm_cid::lock. Drop it.
++				 * already and dealt with an eventually set
++				 * TRANSIT bit. If the CID is owned by the CPU
++				 * then drop it.
 +				 */
 +				mm_drop_cid_on_cpu(mm, this_cpu_ptr(mm->mm_cid.pcpu));
 +			}
@@ -8648,10 +8647,10 @@ index 000000000000..1dbd7eb6a434
 +{}
 diff --git a/kernel/sched/alt_sched.h b/kernel/sched/alt_sched.h
 new file mode 100644
-index 000000000000..a95cfd2910f3
+index 000000000000..25f29fd9d097
 --- /dev/null
 +++ b/kernel/sched/alt_sched.h
-@@ -0,0 +1,1068 @@
+@@ -0,0 +1,1070 @@
 +#ifndef _KERNEL_SCHED_ALT_SCHED_H
 +#define _KERNEL_SCHED_ALT_SCHED_H
 +
@@ -9494,8 +9493,10 @@ index 000000000000..a95cfd2910f3
 +static __always_inline void mm_drop_cid_on_cpu(struct mm_struct *mm, struct mm_cid_pcpu *pcp)
 +{
 +	/* Clear the ONCPU bit, but do not set UNSET in the per CPU storage */
-+	pcp->cid = cpu_cid_to_cid(pcp->cid);
-+	mm_drop_cid(mm, pcp->cid);
++	if (cid_on_cpu(pcp->cid)) {
++		pcp->cid = cpu_cid_to_cid(pcp->cid);
++		mm_drop_cid(mm, pcp->cid);
++	}
 +}
 +
 +static inline unsigned int __mm_get_cid(struct mm_struct *mm, unsigned int max_cids)
@@ -11535,22 +11536,6 @@ index 0de2bb7cbec0..36ba69ac1397 100644
  
  	return false;
  }
-diff --git a/kernel/time/timer.c b/kernel/time/timer.c
-index 1f2364126894..969491340120 100644
---- a/kernel/time/timer.c
-+++ b/kernel/time/timer.c
-@@ -2454,7 +2454,11 @@ static void run_local_timers(void)
- 		 */
- 		if (time_after_eq(jiffies, READ_ONCE(base->next_expiry)) ||
- 		    (i == BASE_DEF && tmigr_requires_handle_remote())) {
-+#ifdef CONFIG_SCHED_BMQ
-+			__raise_softirq_irqoff(TIMER_SOFTIRQ);
-+#else
- 			raise_timer_softirq(TIMER_SOFTIRQ);
-+#endif
- 			return;
- 		}
- 	}
 diff --git a/kernel/trace/trace_osnoise.c b/kernel/trace/trace_osnoise.c
 index 827104d00bc0..0e724481b676 100644
 --- a/kernel/trace/trace_osnoise.c
